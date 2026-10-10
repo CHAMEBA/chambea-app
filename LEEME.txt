@@ -1,0 +1,6 @@
+CHAMBEA - DEMO 1
+
+Abre index.html en Chrome para probar la demo.
+Esta demo funciona sin Firebase, no requiere instalar nada y guarda solicitudes de prueba en el navegador local.
+Para publicarla gratis en un enlace puedes utilizar Firebase Hosting o GitHub Pages (requiere repositorio publico para el plan gratuito en algunos escenarios; no cambies tu repositorio privado sin decidirlo).
+No incluye pagos, cuentas reales ni conexión entre dispositivos.
