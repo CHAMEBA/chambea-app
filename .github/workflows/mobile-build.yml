@@ -1,0 +1,72 @@
+name: Mobile test builds
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [development/capacitor-mobile]
+  pull_request:
+    paths:
+      - index.html
+      - scripts/**
+      - package*.json
+      - capacitor.config.json
+      - android/**
+      - ios/**
+      - .github/workflows/mobile-build.yml
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '13114758'
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - run: npm ci
+      - run: npm run mobile:sync
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew --no-daemon --max-workers=2 assembleDebug lintDebug
+        working-directory: android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chambea-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-lint
+          path: android/app/build/reports/lint-results-debug.*
+
+  ios-simulator:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run mobile:sync
+      - name: Build without distribution signing
+        run: >-
+          xcodebuild -project ios/App/App.xcodeproj -scheme App
+          -configuration Debug -sdk iphonesimulator
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/chambea-ios"
+          CODE_SIGNING_ALLOWED=NO build

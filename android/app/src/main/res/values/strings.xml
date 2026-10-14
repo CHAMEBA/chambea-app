@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">CHAMBEA</string>
+    <string name="title_activity_main">CHAMBEA</string>
+    <string name="package_name">com.chambea.app</string>
+    <string name="custom_url_scheme">com.chambea.app</string>
+</resources>
