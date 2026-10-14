@@ -37,10 +37,13 @@ jobs:
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
       - run: npm run mobile:sync
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Generate approved CHAMBEA app icon and splash assets
         run: |
-          python3 -m pip install --user Pillow
-          python3 scripts/generate-brand-assets.py
+          python -m pip install Pillow
+          python scripts/generate-brand-assets.py
       - uses: gradle/actions/setup-gradle@v4
       - run: ./gradlew --no-daemon --max-workers=2 assembleDebug lintDebug
         working-directory: android
@@ -67,10 +70,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run mobile:sync
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Generate approved CHAMBEA app icon and splash assets
         run: |
-          python3 -m pip install --user Pillow
-          python3 scripts/generate-brand-assets.py
+          python -m pip install Pillow
+          python scripts/generate-brand-assets.py
       - name: Build without distribution signing
         run: >-
           xcodebuild -project ios/App/App.xcodeproj -scheme App
