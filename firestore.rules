@@ -12,10 +12,59 @@ service cloud.firestore {
       return loggedIn() && (owner(jobId) || providerId == request.auth.uid)
         && exists(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(providerId));
     }
+    function changeOnly(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+    function acceptRealQuote(jobId) {
+      return owner(jobId)
+        && resource.data.status == 'open'
+        && request.resource.data.status == 'accepted'
+        && changeOnly(['status','acceptedProviderUid','acceptedAmount','paymentStatus','workStatus','updatedAt'])
+        && request.resource.data.acceptedProviderUid is string
+        && request.resource.data.acceptedAmount is number
+        && request.resource.data.acceptedAmount > 0
+        && request.resource.data.paymentStatus == 'unpaid'
+        && request.resource.data.workStatus == 'accepted'
+        && request.resource.data.updatedAt is timestamp
+        && exists(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid))
+        && get(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid)).data.amount == request.resource.data.acceptedAmount;
+    }
+    function testPaymentChange(jobId) {
+      return owner(jobId)
+        && resource.data.status == 'accepted'
+        && changeOnly(['paymentStatus','updatedAt'])
+        && request.resource.data.updatedAt is timestamp
+        && ((resource.data.paymentStatus == 'unpaid' && request.resource.data.paymentStatus in ['declined','simulated_paid'])
+          || (resource.data.paymentStatus == 'declined' && request.resource.data.paymentStatus == 'simulated_paid')
+          || (resource.data.paymentStatus == 'simulated_paid'
+            && resource.data.workStatus == 'completed'
+            && request.resource.data.paymentStatus == 'released'));
+    }
+    function providerWorkChange() {
+      return loggedIn()
+        && resource.data.status == 'accepted'
+        && resource.data.acceptedProviderUid == request.auth.uid
+        && resource.data.paymentStatus == 'simulated_paid'
+        && changeOnly(['workStatus','updatedAt'])
+        && request.resource.data.updatedAt is timestamp
+        && ((resource.data.workStatus == 'accepted' && request.resource.data.workStatus == 'started')
+          || (resource.data.workStatus == 'started' && request.resource.data.workStatus == 'completed'));
+    }
+    function providerWithdrawChange() {
+      return loggedIn()
+        && resource.data.status == 'accepted'
+        && resource.data.acceptedProviderUid == request.auth.uid
+        && resource.data.paymentStatus == 'released'
+        && !resource.data.keys().hasAny(['withdrawStatus'])
+        && changeOnly(['withdrawStatus','updatedAt'])
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.withdrawStatus == 'withdrawn';
+    }
     match /usuarios/{uid} {
       allow read, write: if loggedIn() && uid == request.auth.uid;
     }
     match /chambea_jobs/{jobId} {
+      // Piloto: catálogo visible solo para personas con sesión iniciada.
       allow read: if loggedIn();
       allow create: if loggedIn()
         && request.resource.data.keys().hasOnly(['ownerUid','category','description','zone','budget','status','createdAt'])
@@ -35,7 +84,11 @@ service cloud.firestore {
         && request.resource.data.budget <= 10000000
         && request.resource.data.status == 'open'
         && request.resource.data.createdAt == request.time;
-      allow update, delete: if false;
+      allow update: if loggedIn() && (
+        acceptRealQuote(jobId) || testPaymentChange(jobId)
+        || providerWorkChange() || providerWithdrawChange()
+      );
+      allow delete: if false;
       match /quotes/{providerId} {
         allow get: if loggedIn() && (owner(jobId) || providerId == request.auth.uid);
         allow list: if owner(jobId);
