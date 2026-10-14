@@ -31,9 +31,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: '13114758'
+      # The hosted Ubuntu runner already includes Android SDK command-line tools.
+      # Avoid attempting to install the obsolete SDK 'tools' package.
+      - run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
       - run: npm run mobile:sync
