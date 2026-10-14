@@ -1,9 +1,9 @@
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+import { initializeApp, getApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
 import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
 import { getFirestore, collection, doc, addDoc, setDoc, getDoc, onSnapshot, query, orderBy, serverTimestamp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
 
 const config={apiKey:'AIzaSyDzRHFCHEOszcMUfONy3FpPyz7l-87DHYQ',authDomain:'chambea-app.firebaseapp.com',projectId:'chambea-app',storageBucket:'chambea-app.firebasestorage.app',messagingSenderId:'853197148466',appId:'1:853197148466:web:9c16f209f5a9c8eeec872b'};
-const auth=getAuth(initializeApp(config,'chambea-online-beta')),db=getFirestore(auth.app);
+const auth=getAuth(getApp()),db=getFirestore(auth.app);
 const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[ch]));
 const jobs=()=>collection(db,'chambea_jobs'), jr=id=>doc(db,'chambea_jobs',id), quotes=id=>collection(db,'chambea_jobs',id,'quotes'), qr=(j,u)=>doc(db,'chambea_jobs',j,'quotes',u),msgs=(j,u)=>collection(db,'chambea_jobs',j,'quotes',u,'messages');
