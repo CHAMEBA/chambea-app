@@ -1,0 +1,77 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function loggedIn() { return request.auth != null; }
+    function jobData(jobId) {
+      return get(/databases/$(database)/documents/chambea_jobs/$(jobId)).data;
+    }
+    function owner(jobId) {
+      return loggedIn() && jobData(jobId).ownerUid == request.auth.uid;
+    }
+    function participant(jobId, providerId) {
+      return loggedIn() && (owner(jobId) || providerId == request.auth.uid)
+        && exists(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(providerId));
+    }
+    match /usuarios/{uid} {
+      allow read, write: if loggedIn() && uid == request.auth.uid;
+    }
+    match /chambea_jobs/{jobId} {
+      allow read: if loggedIn();
+      allow create: if loggedIn()
+        && request.resource.data.keys().hasOnly(['ownerUid','category','description','zone','budget','status','createdAt'])
+        && request.resource.data.keys().hasAll(['ownerUid','category','description','zone','budget','status','createdAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.category is string
+        && request.resource.data.category.size() > 0
+        && request.resource.data.category.size() <= 70
+        && request.resource.data.description is string
+        && request.resource.data.description.size() >= 10
+        && request.resource.data.description.size() <= 1200
+        && request.resource.data.zone is string
+        && request.resource.data.zone.size() >= 2
+        && request.resource.data.zone.size() <= 100
+        && request.resource.data.budget is number
+        && request.resource.data.budget >= 0
+        && request.resource.data.budget <= 10000000
+        && request.resource.data.status == 'open'
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+      match /quotes/{providerId} {
+        allow get: if loggedIn() && (owner(jobId) || providerId == request.auth.uid);
+        allow list: if owner(jobId);
+        allow create: if loggedIn()
+          && providerId == request.auth.uid
+          && !owner(jobId)
+          && jobData(jobId).status == 'open'
+          && request.resource.data.keys().hasOnly(['providerUid','clientUid','providerName','amount','note','status','createdAt'])
+          && request.resource.data.keys().hasAll(['providerUid','clientUid','providerName','amount','note','status','createdAt'])
+          && request.resource.data.providerUid == request.auth.uid
+          && request.resource.data.clientUid == jobData(jobId).ownerUid
+          && request.resource.data.providerName is string
+          && request.resource.data.providerName.size() >= 2
+          && request.resource.data.providerName.size() <= 70
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && request.resource.data.amount <= 10000000
+          && request.resource.data.note is string
+          && request.resource.data.note.size() >= 10
+          && request.resource.data.note.size() <= 1000
+          && request.resource.data.status == 'sent'
+          && request.resource.data.createdAt == request.time;
+        allow update, delete: if false;
+        match /messages/{messageId} {
+          allow read: if participant(jobId,providerId);
+          allow create: if participant(jobId,providerId)
+            && request.resource.data.keys().hasOnly(['senderUid','body','createdAt'])
+            && request.resource.data.keys().hasAll(['senderUid','body','createdAt'])
+            && request.resource.data.senderUid == request.auth.uid
+            && request.resource.data.body is string
+            && request.resource.data.body.size() > 0
+            && request.resource.data.body.size() <= 800
+            && request.resource.data.createdAt == request.time;
+          allow update, delete: if false;
+        }
+      }
+    }
+  }
+}
