@@ -3,9 +3,9 @@
  * Una única capa de datos y acciones sobre Firebase Auth / Firestore.
  * Los pagos son simulaciones explícitas: no se solicita tarjeta ni se mueve dinero.
  */
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
-import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
-import { getFirestore, collection, doc, getDoc, setDoc, addDoc, onSnapshot, query, orderBy, limit, serverTimestamp, updateDoc, runTransaction } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js';
+import { initializeApp } from 'firebase/app';
+import { getAuth, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, sendPasswordResetEmail } from 'firebase/auth';
+import { getFirestore, collection, doc, getDoc, setDoc, addDoc, onSnapshot, query, orderBy, limit, serverTimestamp, updateDoc, runTransaction } from 'firebase/firestore';
 
 const app=initializeApp({
   apiKey:'AIzaSyDzRHFCHEOszcMUfONy3FpPyz7l-87DHYQ',
@@ -428,5 +428,8 @@ window.render=function(){originalRender();const appRoot=document.getElementById(
 };
 // Interceptar métodos inseguros de la maqueta: no se utilizan en V1.
 window.guest=()=>{S.auth='register';route('auth')};
+window.addEventListener('offline',()=>banner('Sin conexión a Internet. La sincronización se reanudará al conectarte.',true));
+window.addEventListener('online',()=>banner('Conexión recuperada. Sincronizando CHAMBEA...'));
+window.addEventListener('unhandledrejection',event=>{console.error('CHAMBEA error inesperado',event.reason);banner('Ocurrió un error. Intenta de nuevo o revisa tu conexión.',true)});
 banner('Iniciando CHAMBEA V1...');
 console.info('CHAMBEA V1: autenticación, solicitudes, cotizaciones, conversación y pagos ficticios en Firebase.');
