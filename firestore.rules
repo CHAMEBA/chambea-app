@@ -29,13 +29,24 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid))
         && get(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid)).data.amount == request.resource.data.acceptedAmount;
     }
+    function agreementData(jobId) {
+      return get(/databases/$(database)/documents/chambea_jobs/$(jobId)/agreements/current).data;
+    }
+    function readyForTestPayment(jobId) {
+      return exists(/databases/$(database)/documents/chambea_jobs/$(jobId)/agreements/current)
+        && agreementData(jobId).appointmentStatus == 'confirmed'
+        && agreementData(jobId).visitStatus == 'inspected'
+        && agreementData(jobId).revisionStatus in ['original_confirmed','approved'];
+    }
     function testPaymentChange(jobId) {
       return owner(jobId)
         && resource.data.status == 'accepted'
         && changeOnly(['paymentStatus','updatedAt'])
         && request.resource.data.updatedAt is timestamp
-        && ((resource.data.paymentStatus == 'unpaid' && request.resource.data.paymentStatus in ['declined','simulated_paid'])
-          || (resource.data.paymentStatus == 'declined' && request.resource.data.paymentStatus == 'simulated_paid')
+        && ((resource.data.paymentStatus in ['unpaid','declined']
+            && request.resource.data.paymentStatus == 'simulated_paid'
+            && readyForTestPayment(jobId))
+          || (resource.data.paymentStatus == 'unpaid' && request.resource.data.paymentStatus == 'declined')
           || (resource.data.paymentStatus == 'simulated_paid'
             && resource.data.workStatus == 'completed'
             && request.resource.data.paymentStatus == 'released'));
@@ -89,6 +100,88 @@ service cloud.firestore {
         || providerWorkChange() || providerWithdrawChange()
       );
       allow delete: if false;
+      // Coordinación privada: sólo cliente y proveedor adjudicado.
+      // No guardar direcciones ni teléfonos en solicitudes públicas.
+      match /agreements/{agreementId} {
+        function assigned() {
+          return loggedIn()
+            && jobData(jobId).status == 'accepted'
+            && (jobData(jobId).ownerUid == request.auth.uid
+              || jobData(jobId).acceptedProviderUid == request.auth.uid);
+        }
+        function isClient() { return assigned() && jobData(jobId).ownerUid == request.auth.uid; }
+        function isProvider() { return assigned() && jobData(jobId).acceptedProviderUid == request.auth.uid; }
+        function beforeCharge() {
+          return assigned() && jobData(jobId).paymentStatus in ['unpaid','declined'];
+        }
+        allow get: if agreementId == 'current' && assigned();
+        allow list: if false;
+        allow create: if agreementId == 'current' && isClient()
+          && request.resource.data.keys().hasOnly([
+            'clientUid','providerUid','baseAmount','appointmentStatus',
+            'visitStatus','revisionStatus','createdAt','updatedAt'])
+          && request.resource.data.keys().hasAll([
+            'clientUid','providerUid','baseAmount','appointmentStatus',
+            'visitStatus','revisionStatus','createdAt','updatedAt'])
+          && request.resource.data.clientUid == request.auth.uid
+          && request.resource.data.providerUid == jobData(jobId).acceptedProviderUid
+          && request.resource.data.baseAmount == jobData(jobId).acceptedAmount
+          && request.resource.data.appointmentStatus == 'unscheduled'
+          && request.resource.data.visitStatus == 'pending'
+          && request.resource.data.revisionStatus == 'none'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow update: if agreementId == 'current'
+          && beforeCharge()
+          && request.resource.data.clientUid == resource.data.clientUid
+          && request.resource.data.providerUid == resource.data.providerUid
+          && request.resource.data.baseAmount == resource.data.baseAmount
+          && request.resource.data.updatedAt == request.time
+          && (
+            // Uno propone fecha y el otro la confirma.
+            (resource.data.visitStatus == 'pending'
+              && changeOnly(['appointmentAt','appointmentBy','appointmentStatus','updatedAt'])
+              && request.resource.data.appointmentStatus == 'proposed'
+              && request.resource.data.appointmentBy == request.auth.uid
+              && request.resource.data.appointmentAt is timestamp
+              && request.resource.data.appointmentAt > request.time
+              && request.resource.data.appointmentAt < request.time + duration.value(366,'d'))
+            || (resource.data.appointmentStatus == 'proposed'
+              && resource.data.appointmentBy != request.auth.uid
+              && changeOnly(['appointmentStatus','updatedAt'])
+              && request.resource.data.appointmentStatus == 'confirmed')
+            // El proveedor confirma que inspeccionó el alcance.
+            || (isProvider()
+              && resource.data.appointmentStatus == 'confirmed'
+              && resource.data.visitStatus == 'pending'
+              && changeOnly(['visitStatus','updatedAt'])
+              && request.resource.data.visitStatus == 'inspected')
+            // El proveedor confirma el importe original.
+            || (isProvider()
+              && resource.data.visitStatus == 'inspected'
+              && resource.data.revisionStatus in ['none','rejected']
+              && changeOnly(['revisionStatus','updatedAt'])
+              && request.resource.data.revisionStatus == 'original_confirmed')
+            // El proveedor propone otro importe con una justificación.
+            || (isProvider()
+              && resource.data.visitStatus == 'inspected'
+              && resource.data.revisionStatus in ['none','rejected']
+              && changeOnly(['revisionStatus','revisedAmount','revisionReason','updatedAt'])
+              && request.resource.data.revisionStatus == 'pending'
+              && request.resource.data.revisedAmount is number
+              && request.resource.data.revisedAmount > 0
+              && request.resource.data.revisedAmount <= 10000000
+              && request.resource.data.revisionReason is string
+              && request.resource.data.revisionReason.size() >= 10
+              && request.resource.data.revisionReason.size() <= 500)
+            // Únicamente el cliente acepta o rechaza el nuevo precio.
+            || (isClient()
+              && resource.data.revisionStatus == 'pending'
+              && changeOnly(['revisionStatus','updatedAt'])
+              && request.resource.data.revisionStatus in ['approved','rejected'])
+          );
+        allow delete: if false;
+      }
       match /quotes/{providerId} {
         allow get: if loggedIn() && (owner(jobId) || providerId == request.auth.uid);
         allow list: if owner(jobId);
@@ -111,7 +204,26 @@ service cloud.firestore {
           && request.resource.data.note.size() <= 1000
           && request.resource.data.status == 'sent'
           && request.resource.data.createdAt == request.time;
-        allow update, delete: if false;
+        // Respuestas formales sobre la oferta, antes de adjudicar el trabajo.
+        allow update: if loggedIn() && jobData(jobId).status == 'open'
+          && request.resource.data.updatedAt == request.time
+          && (
+            (owner(jobId)
+              && resource.data.status == 'sent'
+              && request.resource.data.status in ['changes_requested','rejected']
+              && changeOnly(['status','updatedAt']))
+            || (providerId == request.auth.uid
+              && resource.data.status == 'changes_requested'
+              && request.resource.data.status == 'sent'
+              && changeOnly(['status','amount','note','updatedAt'])
+              && request.resource.data.amount is number
+              && request.resource.data.amount > 0
+              && request.resource.data.amount <= 10000000
+              && request.resource.data.note is string
+              && request.resource.data.note.size() >= 10
+              && request.resource.data.note.size() <= 1000)
+          );
+        allow delete: if false;
         match /messages/{messageId} {
           allow read: if participant(jobId,providerId);
           allow create: if participant(jobId,providerId)
