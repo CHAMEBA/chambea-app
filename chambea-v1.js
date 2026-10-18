@@ -141,12 +141,32 @@ function notices(){C.notices=[];if(!uid())return;
   for(const j of C.jobs.values()){
     if(own(j)){
       makeNotice('job/'+j.id,'Solicitud publicada',j.category+' · '+j.zone,'job',j.id,null,j.createdAt);
-      for(const q of qs(j.id))makeNotice('quote/'+j.id+'/'+q.providerUid,'Nueva cotización',q.providerName+' · '+money(q.amount),'quotes',j.id,q.providerUid,q.createdAt);
+      for(const q of qs(j.id))makeNotice('quote/'+j.id+'/'+q.providerUid+'/'+q.status,
+          q.status==='rejected'?'Presupuesto rechazado':q.status==='changes_requested'?'Modificación solicitada':'Cotización recibida',
+          q.providerName+' · '+money(q.amount),'quotes',j.id,q.providerUid,q.updatedAt||q.createdAt);
     } else if(j.status==='open')makeNotice('available/'+j.id,'Nueva oportunidad',j.category+' · '+j.zone,'opportunities',j.id,null,j.createdAt);
     if(j.status==='accepted'&&(own(j)||j.acceptedProviderUid===uid())){
       makeNotice('assigned/'+j.id,own(j)?'Contratación confirmada':'Tu cotización fue aceptada',j.category+' · '+money(j.acceptedAmount),'tracking',j.id,j.acceptedProviderUid,j.updatedAt);
       if(j.paymentStatus&&j.paymentStatus!=='unpaid')makeNotice('paid/'+j.id+'/'+j.paymentStatus,'Estado del pago ficticio',payText(j.paymentStatus)+' · '+money(j.acceptedAmount),'wallet',j.id,null,j.updatedAt);
       if(j.workStatus==='completed')makeNotice('completed/'+j.id,'Trabajo terminado',j.category+' · confirma la liberación ficticia','tracking',j.id,null,j.updatedAt);
+    }
+  }
+  for(const j of C.jobs.values()){
+    if(!own(j)){
+      const mine=offer(j.id,uid());
+      if(mine)makeNotice('offerstatus/'+j.id+'/'+mine.status,
+        mine.status==='changes_requested'?'Tu presupuesto necesita cambios':mine.status==='rejected'?'El cliente rechazó tu presupuesto':j.acceptedProviderUid===uid()?'Fuiste contratado':'Cotización enviada',
+        j.category+' · '+money(mine.amount),mine.status==='changes_requested'?'worklist':'worklist',j.id,uid(),mine.updatedAt||mine.createdAt);
+    }
+    const a=agreement(j.id);
+    if(j.status==='accepted'&&a&&participant(j)){
+      makeNotice('schedule/'+j.id+'/'+a.appointmentStatus+'/'+(stamp(a.updatedAt)||0),
+        a.appointmentStatus==='proposed'?'Propuesta de fecha recibida':a.appointmentStatus==='confirmed'?'Fecha de servicio confirmada':'Agenda de servicio',
+        j.category+' · '+scheduleState(a),'tracking',j.id,j.acceptedProviderUid,a.updatedAt);
+      if(a.revisionStatus==='pending'||a.revisionStatus==='approved'||a.revisionStatus==='rejected')
+        makeNotice('revision/'+j.id+'/'+a.revisionStatus,
+          a.revisionStatus==='pending'?'Recotización pendiente de respuesta':a.revisionStatus==='approved'?'Nuevo presupuesto aceptado':'Nuevo presupuesto rechazado',
+          j.category+' · '+money(a.revisedAmount||j.acceptedAmount),'tracking',j.id,j.acceptedProviderUid,a.updatedAt);
     }
   }
   for(const [k,items] of C.messages){const [j,p]=k.split('/');for(const m of items){if(m.senderUid!==uid())makeNotice('msg/'+j+'/'+p+'/'+m.id,'Nuevo mensaje',String(m.body||'').slice(0,80),'chat',j,p,m.createdAt)}}
@@ -485,8 +505,8 @@ window.reviseOffer=async function(ev,id){
   ev.preventDefault();if(!guard()||C.busy)return;
   const j=job(id),q=offer(id,uid());
   if(!j||own(j)||j.status!=='open'||q?.status!=='changes_requested')return toast('Esta cotización no puede modificarse.');
-  const amount=Number(document.getElementById('reofferAmount')?.value||0);
-  const note=document.getElementById('reofferNote')?.value.trim()||'';
+  const amount=Number(ev.target.querySelector('[name=reofferAmount]')?.value||0);
+  const note=ev.target.querySelector('[name=reofferNote]')?.value.trim()||'';
   if(amount<=0||amount>10000000||!Number.isFinite(amount)||note.length<10||note.length>1000)return toast('Escribe el nuevo precio y los conceptos incluidos.');
   C.busy=true;
   try{await updateDoc(quoteDoc(id,uid()),{amount,note,status:'sent',updatedAt:serverTimestamp()});toast('Nueva propuesta enviada al cliente.');}
@@ -522,8 +542,8 @@ window.worklist=function(){
       '<p class="sub">'+(j.acceptedProviderUid===uid()?'ACEPTADA · Contratado':j.status==='accepted'?'No seleccionado':quoteState(q))+'</p>'+
       '<div class="stack">'+btn('Conversar con cliente',"openChatFor("+arg(j.id)+","+arg(uid())+")",'outline block')+
       (j.status==='open'&&q.status==='changes_requested'?'<form onsubmit="reviseOffer(event,'+arg(j.id)+')">'+
-        '<div class="field"><label class="label">Nuevo importe MXN</label><input id="reofferAmount" class="control" type="number" required min="1" max="10000000" value="'+Number(q.amount)+'"></div>'+
-        '<div class="field"><label class="label">Qué incluye la propuesta corregida</label><textarea id="reofferNote" class="control" required minlength="10" maxlength="1000">'+esc(q.note)+'</textarea></div>'+
+        '<div class="field"><label class="label">Nuevo importe MXN</label><input name="reofferAmount" class="control" type="number" required min="1" max="10000000" value="'+Number(q.amount)+'"></div>'+
+        '<div class="field"><label class="label">Qué incluye la propuesta corregida</label><textarea name="reofferNote" class="control" required minlength="10" maxlength="1000">'+esc(q.note)+'</textarea></div>'+
         '<button class="btn primary block" type="submit">Enviar propuesta modificada</button></form>':'')+
       (j.acceptedProviderUid===uid()?btn('Abrir agenda y trabajo',"go('tracking',"+arg(j.id)+")",'primary block'):'')+
       '</div></div>').join(''):empty('No has cotizado todavía','Busca oportunidades y envía presupuestos.',btn('Ver oportunidades',"go('opportunities')")))+
