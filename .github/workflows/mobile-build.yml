@@ -19,6 +19,8 @@ permissions:
 
 jobs:
   android:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -56,6 +58,22 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+      # Direct .apk GitHub Release, avoiding sandbox link and Actions ZIP-only artifacts.
+      # This is an unsigned-for-store DEBUG build, intended solely for user device testing.
+      - name: Offer direct CHAMBEA V1 Android APK download
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/development/capacitor-mobile'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='chambea-v1-android-pruebas'
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title 'CHAMBEA V1 · Android para pruebas' --notes 'APK directo para pruebas en teléfonos Android. No es una versión firmada para Play Store. Los cobros son simulados y las reglas actualizadas de Firebase deben publicarse para la agenda y las recotizaciones.'
+          fi
+          cp android/app/build/outputs/apk/debug/app-debug.apk CHAMBEA_V1_ANDROID.apk
+          gh release upload "$TAG" CHAMBEA_V1_ANDROID.apk --repo "$GITHUB_REPOSITORY" --clobber
+          echo 'Descarga directa: https://github.com/'"$GITHUB_REPOSITORY"'/releases/download/'"$TAG"'/CHAMBEA_V1_ANDROID.apk'
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
