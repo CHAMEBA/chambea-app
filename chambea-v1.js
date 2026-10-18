@@ -14,7 +14,7 @@ const app=initializeApp({
   appId:'1:853197148466:web:9c16f209f5a9c8eeec872b'
 });
 const auth=getAuth(app), db=getFirestore(app);
-const C={user:null,ready:false,jobs:new Map(),quotes:new Map(),messages:new Map(),listeners:new Map(),jobStop:null,profileStop:null,noticeRead:new Set(),notices:[],busy:false,errors:[],lastStatus:''};
+const C={user:null,ready:false,jobs:new Map(),quotes:new Map(),messages:new Map(),listeners:new Map(),jobStop:null,profileStop:null,noticeRead:new Set(),notices:[],agreements:new Map(),busy:false,errors:[],lastStatus:''};
 const uid=()=>C.user?.uid||null;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const arg=s=>JSON.stringify(String(s)).replace(/"/g,'&quot;');
@@ -73,7 +73,7 @@ function clean(){
   if(C.jobStop){C.jobStop();C.jobStop=null;}
   if(C.profileStop){C.profileStop();C.profileStop=null;}
   for(const stop of C.listeners.values())try{stop()}catch{}
-  C.listeners.clear();C.jobs.clear();C.quotes.clear();C.messages.clear();C.notices=[];
+  C.listeners.clear();C.jobs.clear();C.quotes.clear();C.messages.clear();C.agreements.clear();C.notices=[];
   data.jobs=[];data.messages={};
 }
 function addWatch(k,ref,fn){if(C.listeners.has(k))return;
@@ -118,9 +118,9 @@ function startSession(user){
   C.jobStop=onSnapshot(query(collection(db,'chambea_jobs'),orderBy('createdAt','desc'),limit(100)),snap=>{
     const before=new Set(C.jobs.keys());C.jobs.clear();
     for(const row of snap.docs){C.jobs.set(row.id,{id:row.id,...row.data()});before.delete(row.id);}
-    for(const id of before){for(const k of [...C.listeners.keys()])if(k.startsWith('owner/'+id)||k.startsWith('provider/'+id)||k.startsWith('msg/'+id+'/')){
-      C.listeners.get(k)();C.listeners.delete(k);}C.quotes.delete(id);}
-    for(const j of C.jobs.values())watchQuotes(j);
+    for(const id of before){for(const k of [...C.listeners.keys()])if(k.startsWith('owner/'+id)||k.startsWith('provider/'+id)||k.startsWith('msg/'+id+'/')||k==='agreement/'+id){
+      C.listeners.get(k)();C.listeners.delete(k);}C.quotes.delete(id);C.agreements.delete(id);}
+    for(const j of C.jobs.values()){watchQuotes(j);if(j.status==='accepted')watchAgreement(j);}
     syncLegacy();notices();banner('Conectado a Firebase · CHAMBEA V1');safeRender();
   },ex=>banner(msgError(ex),true));
   data.session=true;
@@ -433,3 +433,209 @@ window.addEventListener('online',()=>banner('Conexión recuperada. Sincronizando
 window.addEventListener('unhandledrejection',event=>{console.error('CHAMBEA error inesperado',event.reason);banner('Ocurrió un error. Intenta de nuevo o revisa tu conexión.',true)});
 banner('Iniciando CHAMBEA V1...');
 console.info('CHAMBEA V1: autenticación, solicitudes, cotizaciones, conversación y pagos ficticios en Firebase.');
+
+
+/* CHAMBEA V1 — acuerdo operativo: respuesta formal, agenda y recotización. */
+const agreementDoc=id=>doc(db,'chambea_jobs',String(id),'agreements','current');
+const agreement=id=>C.agreements.get(String(id))||null;
+const quoteState=q=>({sent:'Enviada · esperando respuesta',changes_requested:'Cliente pidió modificar',rejected:'Rechazada por cliente'})[q.status]||'Enviada';
+const scheduleState=a=>({unscheduled:'Pendiente de proponer fecha',proposed:'Fecha propuesta · falta confirmación',confirmed:'Fecha confirmada por ambas partes'})[a?.appointmentStatus]||'Sin programar';
+const revisionState=a=>({none:'Pendiente de inspección',pending:'Nueva cotización pendiente de respuesta',approved:'Nueva cotización aceptada',rejected:'Nuevo precio rechazado',original_confirmed:'Importe original confirmado'})[a?.revisionStatus]||'Pendiente';
+function watchAgreement(j){
+  if(!participant(j))return;
+  addWatch('agreement/'+j.id,agreementDoc(j.id),snap=>{
+    C.agreements.set(j.id,snap.exists()?snap.data():null);
+    safeRender();
+  });
+}
+async function ensureAgreement(id){
+  const snap=await getDoc(agreementDoc(id));
+  if(snap.exists()){C.agreements.set(id,snap.data());return snap.data();}
+  const jSnap=await getDoc(jobDoc(id));
+  const j=jSnap.data();
+  if(!j||j.ownerUid!==uid()||j.status!=='accepted')throw Error('Solo el cliente que contrató puede iniciar el acuerdo.');
+  const initial={
+    clientUid:uid(),providerUid:j.acceptedProviderUid,baseAmount:j.acceptedAmount,
+    appointmentStatus:'unscheduled',visitStatus:'pending',revisionStatus:'none',
+    createdAt:serverTimestamp(),updatedAt:serverTimestamp()
+  };
+  await setDoc(agreementDoc(id),initial);
+  return initial;
+}
+const _acceptQuoteV1=window.acceptQuote;
+window.acceptQuote=async function(id,p){
+  await _acceptQuoteV1(id,p);
+  const snap=await getDoc(jobDoc(id)).catch(()=>null);
+  if(snap?.data()?.status==='accepted'&&snap.data().acceptedProviderUid===p){
+    try{await ensureAgreement(id)}catch(ex){alertError(ex)}
+  }
+};
+window.respondQuote=async function(id,p,answer){
+  if(!guard()||C.busy)return;
+  const j=job(id),q=offer(id,p);
+  if(!j||!own(j)||j.status!=='open'||q?.status!=='sent')return toast('La oferta ya cambió de estado.');
+  if(!confirm(answer==='rejected'?'¿Rechazar esta cotización?':'¿Solicitar un nuevo presupuesto? El proveedor podrá ajustar su propuesta.'))return;
+  C.busy=true;
+  try{
+    await updateDoc(quoteDoc(id,p),{status:answer,updatedAt:serverTimestamp()});
+    toast(answer==='rejected'?'Cotización rechazada. El proveedor verá el estado.':'Se solicitó una modificación. El proveedor podrá enviar otro importe.');
+  }catch(ex){alertError(ex)}finally{C.busy=false}
+};
+window.reviseOffer=async function(ev,id){
+  ev.preventDefault();if(!guard()||C.busy)return;
+  const j=job(id),q=offer(id,uid());
+  if(!j||own(j)||j.status!=='open'||q?.status!=='changes_requested')return toast('Esta cotización no puede modificarse.');
+  const amount=Number(document.getElementById('reofferAmount')?.value||0);
+  const note=document.getElementById('reofferNote')?.value.trim()||'';
+  if(amount<=0||amount>10000000||!Number.isFinite(amount)||note.length<10||note.length>1000)return toast('Escribe el nuevo precio y los conceptos incluidos.');
+  C.busy=true;
+  try{await updateDoc(quoteDoc(id,uid()),{amount,note,status:'sent',updatedAt:serverTimestamp()});toast('Nueva propuesta enviada al cliente.');}
+  catch(ex){alertError(ex)}finally{C.busy=false}
+};
+window.quotes=function(){
+  const j=job(S.jobid);
+  if(!j||!own(j))return shell('Cotizaciones','Solo quien publicó el trabajo puede responder las ofertas.',btn('Mis solicitudes',"go('jobs')"));
+  const arr=qs(j.id);
+  return shell('Cotizaciones recibidas',esc(j.category)+' · '+arr.length+' propuesta(s). Cada decisión se refleja en el celular del proveedor.',
+    '<div class="stack" style="margin-top:16px">'+
+    (arr.length?arr.map(q=>'<div class="quote-card"><div class="between"><strong>'+esc(q.providerName||'Proveedor')+'</strong><strong>'+money(q.amount)+'</strong></div>'+
+    '<p>'+esc(q.note)+'</p><p class="sub">'+quoteState(q)+'</p>'+
+    '<div class="stack">'+btn('Abrir chat',"openChatFor("+arg(j.id)+","+arg(q.providerUid)+")",'outline block')+
+    (j.status==='open'&&q.status==='sent'?btn('Aceptar presupuesto',"acceptQuote("+arg(j.id)+","+arg(q.providerUid)+")",'primary block')+
+      btn('Pedir modificación',"respondQuote("+arg(j.id)+","+arg(q.providerUid)+",'changes_requested')",'outline block')+
+      btn('Rechazar presupuesto',"respondQuote("+arg(j.id)+","+arg(q.providerUid)+",'rejected')",'pale block'):'')+
+    (j.acceptedProviderUid===q.providerUid?btn('Ver acuerdo y fecha',"go('tracking',"+arg(j.id)+")",'primary block'):'')+
+    '</div></div>').join(''):empty('Todavía sin propuestas','Cuando otro usuario cotice desde otro celular, aparecerá aquí.'))+
+    '</div>');
+};
+window.worklist=function(){
+  const list=[...C.jobs.values()].flatMap(j=>qs(j.id).filter(q=>q.providerUid===uid()).map(q=>({j,q})));
+  const j=S.offerOpen&&S.offer?job(S.offer.id):null;
+  return shell('Mis cotizaciones','Comprueba cuáles fueron aceptadas, rechazadas o requieren modificaciones.',
+    (j?'<form class="panel" onsubmit="sendOffer(event)" style="padding:17px;margin:16px 0"><h3>'+esc(j.category)+'</h3><p>'+esc(j.description)+'</p>'+
+      '<div class="field"><label class="label">Precio de la propuesta (MXN)</label><input class="control" id="offerPrice" type="number" required min="1" max="10000000"></div>'+
+      '<div class="field"><label class="label">Mano de obra, materiales, plazo y condiciones</label><textarea class="control" id="offerText" required minlength="10" maxlength="1000"></textarea></div>'+
+      '<button class="btn primary block" type="submit">Enviar cotización</button>'+btn('Cancelar',"cancelOffer()",'outline block')+'</form>':'')+
+    '<div class="stack" style="margin-top:17px">'+
+    (list.length?list.map(({j,q})=>'<div class="request-card"><div class="between"><h3>'+esc(j.category)+'</h3><strong>'+money(q.amount)+'</strong></div>'+
+      '<p>'+esc(q.note)+'</p>'+
+      '<p class="sub">'+(j.acceptedProviderUid===uid()?'ACEPTADA · Contratado':j.status==='accepted'?'No seleccionado':quoteState(q))+'</p>'+
+      '<div class="stack">'+btn('Conversar con cliente',"openChatFor("+arg(j.id)+","+arg(uid())+")",'outline block')+
+      (j.status==='open'&&q.status==='changes_requested'?'<form onsubmit="reviseOffer(event,'+arg(j.id)+')">'+
+        '<div class="field"><label class="label">Nuevo importe MXN</label><input id="reofferAmount" class="control" type="number" required min="1" max="10000000" value="'+Number(q.amount)+'"></div>'+
+        '<div class="field"><label class="label">Qué incluye la propuesta corregida</label><textarea id="reofferNote" class="control" required minlength="10" maxlength="1000">'+esc(q.note)+'</textarea></div>'+
+        '<button class="btn primary block" type="submit">Enviar propuesta modificada</button></form>':'')+
+      (j.acceptedProviderUid===uid()?btn('Abrir agenda y trabajo',"go('tracking',"+arg(j.id)+")",'primary block'):'')+
+      '</div></div>').join(''):empty('No has cotizado todavía','Busca oportunidades y envía presupuestos.',btn('Ver oportunidades',"go('opportunities')")))+
+    '</div>');
+};
+window.proposeAppointment=async function(ev,id){
+  ev.preventDefault();if(!guard()||C.busy)return;
+  const j=job(id);if(!j||!participant(j))return toast('No tienes acceso a la agenda.');
+  const value=document.getElementById('appointmentDate')?.value;
+  const date=value?new Date(value):null;
+  if(!date||!Number.isFinite(date.valueOf())||date.getTime()<Date.now()+60000||date.getTime()>Date.now()+366*86400000)return toast('Elige una fecha futura válida.');
+  C.busy=true;
+  try{
+    if(own(j))await ensureAgreement(id);
+    await updateDoc(agreementDoc(id),{appointmentAt:date,appointmentBy:uid(),appointmentStatus:'proposed',updatedAt:serverTimestamp()});
+    toast('Fecha propuesta. La otra persona debe confirmarla.');
+  }catch(ex){alertError(ex)}finally{C.busy=false}
+};
+window.confirmAppointment=async function(id){
+  const a=agreement(id),j=job(id);
+  if(!a||!j||!participant(j)||a.appointmentStatus!=='proposed'||a.appointmentBy===uid())return toast('Esta fecha debe confirmarla la otra persona.');
+  try{await updateDoc(agreementDoc(id),{appointmentStatus:'confirmed',updatedAt:serverTimestamp()});toast('Fecha confirmada por ambas partes.');}
+  catch(ex){alertError(ex)}
+};
+window.finishVisit=async function(id){
+  const j=job(id),a=agreement(id);
+  if(!j||j.acceptedProviderUid!==uid()||a?.appointmentStatus!=='confirmed'||a.visitStatus!=='pending')return toast('Primero ambos deben confirmar la fecha.');
+  if(!confirm('¿Ya revisaste personalmente el alcance del trabajo?'))return;
+  try{await updateDoc(agreementDoc(id),{visitStatus:'inspected',updatedAt:serverTimestamp()});toast('Visita registrada. Confirma el presupuesto o propone un cambio.');}
+  catch(ex){alertError(ex)}
+};
+window.confirmOriginal=async function(id){
+  const j=job(id),a=agreement(id);
+  if(!j||j.acceptedProviderUid!==uid()||a?.visitStatus!=='inspected'||!['none','rejected'].includes(a.revisionStatus))return toast('No puedes confirmar ese importe ahora.');
+  try{await updateDoc(agreementDoc(id),{revisionStatus:'original_confirmed',updatedAt:serverTimestamp()});toast('Precio original confirmado para el trabajo.');}
+  catch(ex){alertError(ex)}
+};
+window.proposeFieldPrice=async function(ev,id){
+  ev.preventDefault();
+  const j=job(id),a=agreement(id);
+  if(!j||j.acceptedProviderUid!==uid()||a?.visitStatus!=='inspected'||!['none','rejected'].includes(a.revisionStatus))return toast('No puedes recotizar en este momento.');
+  const amount=Number(document.getElementById('fieldPrice')?.value||0);
+  const reason=document.getElementById('fieldReason')?.value.trim()||'';
+  if(amount<=0||amount>10000000||!Number.isFinite(amount)||reason.length<10||reason.length>500)return toast('Indica el nuevo importe y el motivo del cambio.');
+  try{
+    await updateDoc(agreementDoc(id),{revisionStatus:'pending',revisedAmount:amount,revisionReason:reason,updatedAt:serverTimestamp()});
+    toast('Recotización enviada. Solo el cliente puede aprobar el importe nuevo.');
+  }catch(ex){alertError(ex)}
+};
+window.answerFieldPrice=async function(id,yes){
+  const a=agreement(id),j=job(id);
+  if(!j||!own(j)||a?.revisionStatus!=='pending')return toast('No tienes un cambio pendiente de aprobar.');
+  if(!confirm(yes?'¿Aceptar nuevo presupuesto de '+money(a.revisedAmount)+'?':'¿Rechazar el cambio de presupuesto?'))return;
+  try{await updateDoc(agreementDoc(id),{revisionStatus:yes?'approved':'rejected',updatedAt:serverTimestamp()});
+    toast(yes?'Nuevo presupuesto aprobado. Confirma el importe antes del pago simulado.':'Precio nuevo rechazado. El proveedor debe mantener el original o presentar otra propuesta.');}
+  catch(ex){alertError(ex)}
+};
+window.applyApprovedPrice=async function(id){
+  const a=agreement(id),j=job(id);
+  if(!j||!own(j)||a?.revisionStatus!=='approved')return toast('No hay nueva cotización aceptada.');
+  if(!confirm('Actualizar acuerdo a '+money(a.revisedAmount)+'?'))return;
+  try{await updateDoc(jobDoc(id),{acceptedAmount:a.revisedAmount,updatedAt:serverTimestamp()});toast('Importe acordado actualizado.');}
+  catch(ex){alertError(ex)}
+};
+const _simulatedChargeV1=window.simulatedCharge;
+window.simulatedCharge=function(id,result){
+  const a=agreement(id),j=job(id);
+  if(!a||a.appointmentStatus!=='confirmed'||a.visitStatus!=='inspected'||!['original_confirmed','approved'].includes(a.revisionStatus))
+    return toast('Antes de simular un pago, confirma agenda, visita y presupuesto.');
+  if(a.revisionStatus==='approved'&&Number(j?.acceptedAmount)!==Number(a.revisedAmount))
+    return toast('Primero actualiza el precio a la recotización aceptada.');
+  return _simulatedChargeV1(id,result);
+};
+window.tracking=function(){
+  const j=job(S.jobid);
+  if(!j||j.status!=='accepted'||!participant(j))return shell('Servicio','Solo las personas contratantes pueden consultar este acuerdo.',btn('Mis solicitudes',"go('jobs')"));
+  const client=own(j),a=agreement(j.id),partner=j.acceptedProviderUid,quote=offer(j.id,partner);
+  const parts=[];
+  parts.push('<div class="request-card"><h3>'+esc(j.category)+' · '+money(j.acceptedAmount)+'</h3><p>'+esc(j.description)+'</p><p>'+esc(quote?.providerName||'Profesional')+'</p><p><strong>Trabajo: </strong>'+workText(j.workStatus)+'</p><p><strong>Pago: </strong>'+payText(j.paymentStatus)+'</p></div>');
+  if(!a){
+    parts.push(empty('Preparando acuerdo','El cliente debe activar la coordinación entre ambas personas.',
+      client?btn('Iniciar acuerdo y agenda',"initAgreementScreen("+arg(j.id)+")",'primary block'):''));
+  }else{
+    parts.push('<div class="request-card"><h3>1. Agenda de visita o servicio</h3><p>'+scheduleState(a)+'</p>'+
+      (a.appointmentAt?'<p><b>Fecha:</b> '+new Date(a.appointmentAt.toMillis?.()||0).toLocaleString('es-MX',{dateStyle:'full',timeStyle:'short'})+'</p>':'')+
+      (a.visitStatus==='pending'?'<form onsubmit="proposeAppointment(event,'+arg(j.id)+')"><div class="field"><label class="label">Propón fecha y hora</label><input class="control" id="appointmentDate" type="datetime-local" required></div>'+
+        '<button type="submit" class="btn outline block">Enviar fecha para confirmar</button></form>':'')+
+      (a.appointmentStatus==='proposed'&&a.appointmentBy!==uid()?btn('Confirmar fecha propuesta',"confirmAppointment("+arg(j.id)+")",'primary block'):'')+'</div>');
+    parts.push('<div class="request-card"><h3>2. Revisión del trabajo en campo</h3><p>'+(a.visitStatus==='inspected'?'Visita registrada':'Pendiente de inspección')+'</p>'+
+      (!client&&a.appointmentStatus==='confirmed'&&a.visitStatus==='pending'?btn('Confirmar visita y revisión',"finishVisit("+arg(j.id)+")",'primary block'):'')+'</div>');
+    parts.push('<div class="request-card"><h3>3. Precio y condiciones</h3><p><b>Original:</b> '+money(a.baseAmount)+'</p><p>'+revisionState(a)+'</p>'+
+      (a.revisedAmount?'<p><b>Recotización:</b> '+money(a.revisedAmount)+' · '+esc(a.revisionReason||'')+'</p>':'')+
+      (!client&&a.visitStatus==='inspected'&&['none','rejected'].includes(a.revisionStatus)?
+        btn('Mantener presupuesto original',"confirmOriginal("+arg(j.id)+")",'outline block')+
+        '<form onsubmit="proposeFieldPrice(event,'+arg(j.id)+')"><div class="field"><label class="label">Nuevo presupuesto MXN</label><input class="control" id="fieldPrice" type="number" min="1" max="10000000" required></div>'+
+        '<div class="field"><label class="label">Motivo técnico / cambio de alcance</label><textarea class="control" id="fieldReason" required minlength="10" maxlength="500"></textarea></div><button type="submit" class="btn primary block">Solicitar cambio de precio</button></form>':'')+
+      (client&&a.revisionStatus==='pending'?btn('Aceptar nuevo precio',"answerFieldPrice("+arg(j.id)+",true)",'primary block')+
+        btn('Rechazar nuevo precio',"answerFieldPrice("+arg(j.id)+",false)",'outline block'):'')+
+      (client&&a.revisionStatus==='approved'&&Number(j.acceptedAmount)!==Number(a.revisedAmount)?
+        btn('Confirmar importe final '+money(a.revisedAmount),"applyApprovedPrice("+arg(j.id)+")",'primary block'):'')+'</div>');
+    const ready=a.appointmentStatus==='confirmed'&&a.visitStatus==='inspected'&&['original_confirmed','approved'].includes(a.revisionStatus)
+      &&(a.revisionStatus!=='approved'||Number(j.acceptedAmount)===Number(a.revisedAmount));
+    parts.push('<div class="request-card"><h3>4. Ejecución y pagos simulados</h3><p>'+(ready?'Acuerdo confirmado entre ambas partes.':'La simulación queda bloqueada hasta confirmar fecha, visita y precio.')+'</p>'+
+      (client&&ready&&['unpaid','declined'].includes(j.paymentStatus)?btn('Simular pago aprobado '+money(j.acceptedAmount),"simulatedCharge("+arg(j.id)+",'approve')",'primary block')+
+        btn('Simular pago rechazado',"simulatedCharge("+arg(j.id)+",'decline')",'outline block'):'')+
+      (!client&&j.paymentStatus==='simulated_paid'&&['accepted','started'].includes(j.workStatus)?
+        btn(j.workStatus==='accepted'?'Confirmar inicio de trabajo':'Confirmar trabajo terminado',"advanceWork("+arg(j.id)+")",'primary block'):'')+
+      (client&&j.paymentStatus==='simulated_paid'&&j.workStatus==='completed'?
+        btn('Liberar pago FICTICIO',"releaseTestPayment("+arg(j.id)+")",'primary block'):'')+'</div>');
+  }
+  parts.push('<div class="stack">'+btn('Abrir conversación',"openChatFor("+arg(j.id)+","+arg(partner)+")",'outline block')+
+    btn('Billetera simulada',"go('wallet')",'pale block')+'</div>');
+  return shell('Acuerdo y seguimiento',client?'Vista del cliente':'Vista del proveedor',parts.join('')+note('Todos los importes son ficticios. Las direcciones exactas no deben publicarse en las solicitudes.'));
+};
+window.initAgreementScreen=async function(id){try{await ensureAgreement(id);toast('Acuerdo creado. Ahora ambas partes pueden programar la fecha.');}catch(ex){alertError(ex)}};
