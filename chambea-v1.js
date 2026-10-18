@@ -465,7 +465,7 @@ function watchAgreement(j){
   if(!participant(j))return;
   addWatch('agreement/'+j.id,agreementDoc(j.id),snap=>{
     C.agreements.set(j.id,snap.exists()?snap.data():null);
-    safeRender();
+    notices();safeRender();
   });
 }
 async function ensureAgreement(id){
@@ -484,6 +484,7 @@ async function ensureAgreement(id){
 }
 const _acceptQuoteV1=window.acceptQuote;
 window.acceptQuote=async function(id,p){
+  if(offer(id,p)?.status!=='sent')return toast('Esta propuesta no está disponible para aceptar.');
   await _acceptQuoteV1(id,p);
   const snap=await getDoc(jobDoc(id)).catch(()=>null);
   if(snap?.data()?.status==='accepted'&&snap.data().acceptedProviderUid===p){
