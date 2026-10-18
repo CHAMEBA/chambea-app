@@ -36,6 +36,8 @@ jobs:
       - run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: npm ci
+      - name: Install pinned Firebase runtime and bundler
+        run: npm install --no-save --package-lock=false firebase@10.14.1 esbuild@0.25.12
       - run: npm run build
       - uses: actions/setup-python@v5
         with:
@@ -70,6 +72,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - name: Install pinned Firebase runtime and bundler
+        run: npm install --no-save --package-lock=false firebase@10.14.1 esbuild@0.25.12
       - run: npm run build
       - uses: actions/setup-python@v5
         with:
