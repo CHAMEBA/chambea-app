@@ -27,7 +27,8 @@ service cloud.firestore {
         && request.resource.data.workStatus == 'accepted'
         && request.resource.data.updatedAt is timestamp
         && exists(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid))
-        && get(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid)).data.amount == request.resource.data.acceptedAmount;
+        && get(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid)).data.amount == request.resource.data.acceptedAmount
+        && get(/databases/$(database)/documents/chambea_jobs/$(jobId)/quotes/$(request.resource.data.acceptedProviderUid)).data.status == 'sent';
     }
     function agreementData(jobId) {
       return get(/databases/$(database)/documents/chambea_jobs/$(jobId)/agreements/current).data;
