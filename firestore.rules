@@ -38,6 +38,17 @@ service cloud.firestore {
         && agreementData(jobId).visitStatus == 'inspected'
         && agreementData(jobId).revisionStatus in ['original_confirmed','approved'];
     }
+    function approvedRevisedPrice(jobId) {
+      return owner(jobId)
+        && resource.data.status == 'accepted'
+        && resource.data.paymentStatus in ['unpaid','declined']
+        && readyForTestPayment(jobId)
+        && agreementData(jobId).revisionStatus == 'approved'
+        && resource.data.acceptedAmount == agreementData(jobId).baseAmount
+        && changeOnly(['acceptedAmount','updatedAt'])
+        && request.resource.data.acceptedAmount == agreementData(jobId).revisedAmount
+        && request.resource.data.updatedAt == request.time;
+    }
     function testPaymentChange(jobId) {
       return owner(jobId)
         && resource.data.status == 'accepted'
@@ -45,7 +56,9 @@ service cloud.firestore {
         && request.resource.data.updatedAt is timestamp
         && ((resource.data.paymentStatus in ['unpaid','declined']
             && request.resource.data.paymentStatus == 'simulated_paid'
-            && readyForTestPayment(jobId))
+            && readyForTestPayment(jobId)
+            && (agreementData(jobId).revisionStatus != 'approved'
+                || resource.data.acceptedAmount == agreementData(jobId).revisedAmount))
           || (resource.data.paymentStatus == 'unpaid' && request.resource.data.paymentStatus == 'declined')
           || (resource.data.paymentStatus == 'simulated_paid'
             && resource.data.workStatus == 'completed'
@@ -96,7 +109,7 @@ service cloud.firestore {
         && request.resource.data.status == 'open'
         && request.resource.data.createdAt == request.time;
       allow update: if loggedIn() && (
-        acceptRealQuote(jobId) || testPaymentChange(jobId)
+        acceptRealQuote(jobId) || approvedRevisedPrice(jobId) || testPaymentChange(jobId)
         || providerWorkChange() || providerWithdrawChange()
       );
       allow delete: if false;
