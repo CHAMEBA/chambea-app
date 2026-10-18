@@ -315,7 +315,7 @@ window.worklist=function(){const list=[...C.jobs.values()].flatMap(j=>qs(j.id).f
  (j?'<form class="panel" onsubmit="sendOffer(event)" style="padding:17px;margin:16px 0"><h3>Cotizar: '+esc(j.category)+'</h3><p class="sub">'+esc(j.description)+'</p>'+ 
  '<div class="field"><label class="label">Precio ofrecido (MXN)</label><input class="control" id="offerPrice" required type="number" min="1" max="10000000" step="1" placeholder="Ej. 1800"></div>'+ 
  '<div class="field"><label class="label">Qué incluye tu oferta y cuándo puedes realizarla</label><textarea class="control" id="offerText" required minlength="10" maxlength="1000" placeholder="Incluye mano de obra..." ></textarea></div>'+ 
- '<button class="btn primary block" type="submit">Enviar cotización</button>'+btn('Cancelar',"cancelOffer()",'outline block','style="margin-top:10px"')+'</form>':'')+
+ quoteCalculatorSection('offerPrice')+'<button class="btn primary block" type="submit">Enviar cotización</button>'+btn('Cancelar',"cancelOffer()",'outline block','style="margin-top:10px"')+'</form>':'')+
  '<div class="stack" style="margin-top:17px">'+(list.length?list.map(({j,q})=>'<div class="request-card"><div class="between"><h3>'+esc(j.category)+'</h3><span class="badge">'+(j.acceptedProviderUid===uid()?'Contratado':j.status==='open'?'Enviada':'No seleccionada')+'</span></div><p>'+esc(j.description)+'</p><p><strong>'+money(q.amount)+'</strong></p><p>'+esc(q.note)+'</p>'+ 
  '<div class="stack">'+btn('Abrir chat',"openChatFor("+arg(j.id)+","+arg(uid())+")",'outline block')+
  (j.acceptedProviderUid===uid()?btn('Seguimiento y cobros',"go('tracking',"+arg(j.id)+")",'primary block'):'')+'</div></div>').join(''):empty('Aún no has cotizado','Explora solicitudes y envía tu primera propuesta.',btn('Ver oportunidades',"go('opportunities')")))+'</div>');
@@ -640,7 +640,7 @@ window.tracking=function(){
       (!client&&a.visitStatus==='inspected'&&['none','rejected'].includes(a.revisionStatus)?
         btn('Mantener presupuesto original',"confirmOriginal("+arg(j.id)+")",'outline block')+
         '<form onsubmit="proposeFieldPrice(event,'+arg(j.id)+')"><div class="field"><label class="label">Nuevo presupuesto MXN</label><input class="control" id="fieldPrice" type="number" min="1" max="10000000" required></div>'+
-        '<div class="field"><label class="label">Motivo técnico / cambio de alcance</label><textarea class="control" id="fieldReason" required minlength="10" maxlength="500"></textarea></div><button type="submit" class="btn primary block">Solicitar cambio de precio</button></form>':'')+
+        '<div class="field"><label class="label">Motivo técnico / cambio de alcance</label><textarea class="control" id="fieldReason" required minlength="10" maxlength="500"></textarea></div>'+quoteCalculatorSection('fieldPrice')+'<button type="submit" class="btn primary block">Solicitar cambio de precio</button></form>':'')+
       (client&&a.revisionStatus==='pending'?btn('Aceptar nuevo precio',"answerFieldPrice("+arg(j.id)+",true)",'primary block')+
         btn('Rechazar nuevo precio',"answerFieldPrice("+arg(j.id)+",false)",'outline block'):'')+
       (client&&a.revisionStatus==='approved'&&Number(j.acceptedAmount)!==Number(a.revisedAmount)?
@@ -660,3 +660,33 @@ window.tracking=function(){
   return shell('Acuerdo y seguimiento',client?'Vista del cliente':'Vista del proveedor',parts.join('')+note('Todos los importes son ficticios. Las direcciones exactas no deben publicarse en las solicitudes.'));
 };
 window.initAgreementScreen=async function(id){try{await ensureAgreement(id);toast('Acuerdo creado. Ahora ambas partes pueden programar la fecha.');}catch(ex){alertError(ex)}};
+
+
+// Calculadora de cotización. No se mueve dinero ni se aplican cargos.
+function quoteCalculatorSection(target){
+  return '<div class="panel" style="padding:13px;margin:12px 0;background:#f3fbf9"><h3>Simulador de cotización · MXN</h3>'+
+    '<p class="sub">Calcula tu propuesta por conceptos antes de enviarla.</p><div class="grid2">'+
+    '<div class="field"><label class="label">Mano de obra</label><input class="control calc-part" data-label="Mano de obra" type="number" min="0" max="10000000" value="0"></div>'+
+    '<div class="field"><label class="label">Materiales</label><input class="control calc-part" data-label="Materiales" type="number" min="0" max="10000000" value="0"></div>'+
+    '<div class="field"><label class="label">Visita / traslado</label><input class="control calc-part" data-label="Visita" type="number" min="0" max="10000000" value="0"></div>'+
+    '<div class="field"><label class="label">Otros conceptos</label><input class="control calc-part" data-label="Otros" type="number" min="0" max="10000000" value="0"></div></div>'+
+    '<button class="btn outline block" type="button" onclick="applyQuoteSimulation(this,'+arg(target)+')">Aplicar total al presupuesto</button></div>';
+}
+window.applyQuoteSimulation=function(button,target){
+  const panel=button.closest('.panel'),form=button.closest('form');
+  const costs=[...panel.querySelectorAll('.calc-part')].map(x=>({name:x.dataset.label,value:Number(x.value||0)}));
+  if(costs.some(x=>!Number.isFinite(x.value)||x.value<0||x.value>10000000))return toast('Revisa los importes de los conceptos.');
+  const total=costs.reduce((sum,x)=>sum+x.value,0);
+  if(total<=0||total>10000000)return toast('Introduce costos positivos y verifica el límite.');
+  const amount=form?.querySelector('#'+target);
+  if(!amount)return toast('No encontramos el presupuesto de este formulario.');
+  amount.value=String(total);
+  if(target==='offerPrice'){
+    const note=form.querySelector('#offerText');
+    if(note){
+      const breakdown='Desglose: '+costs.filter(x=>x.value>0).map(x=>x.name+' '+money(x.value)).join(', ')+'. Total '+money(total)+'.';
+      if(note.value.length+breakdown.length+2<=1000)note.value=(note.value.trim()?note.value.trim()+'\n':'')+breakdown;
+    }
+  }
+  toast('Total calculado: '+money(total)+' (simulación).');
+};
